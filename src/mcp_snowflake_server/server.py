@@ -189,22 +189,65 @@ async def handle_describe_table(arguments, db, *_):
         raise ValueError("Missing table_name argument")
 
     table_spec = arguments["table_name"]
-    split_identifier = table_spec.split(".")
+    
+    # Parse the fully qualified table name, respecting quoted identifiers
+    def parse_qualified_name(name_spec):
+        """Parse a qualified name like 'db.schema.table' or '"db.with.dots"."schema"."table"'"""
+        parts = []
+        current_part = ""
+        in_quotes = False
+        i = 0
+        
+        while i < len(name_spec):
+            char = name_spec[i]
+            
+            if char == '"':
+                in_quotes = not in_quotes
+                current_part += char
+            elif char == '.' and not in_quotes:
+                if current_part:
+                    parts.append(current_part)
+                    current_part = ""
+            else:
+                current_part += char
+            i += 1
+        
+        if current_part:
+            parts.append(current_part)
+        
+        return parts
+    
+    split_identifier = parse_qualified_name(table_spec)
 
-    # Parse the fully qualified table name
-    if len(split_identifier) < 3:
-        raise ValueError("Table name must be fully qualified as 'database.schema.table'")
+    # Parse the fully qualified table name - support both 2-part and 3-part identifiers
+    if len(split_identifier) == 2:
+        # 2-part: schema.table (database inferred from connection)
+        database_name = None  # Will be handled later with connection info
+        schema_name = split_identifier[0].strip('"')
+        table_name = split_identifier[1].strip('"')
+    elif len(split_identifier) == 3:
+        # 3-part: database.schema.table
+        database_name = split_identifier[0].strip('"')
+        schema_name = split_identifier[1].strip('"')
+        table_name = split_identifier[2].strip('"')
+    else:
+        raise ValueError(f"Table name must be either 'schema.table' or 'database.schema.table'. Got {len(split_identifier)} parts: {split_identifier}")
 
-    # Strip quotes if present but preserve original case
-    database_name = split_identifier[0].strip('"')
-    schema_name = split_identifier[1].strip('"')
-    table_name = split_identifier[2].strip('"')
-
-    query = f"""
-        SELECT column_name, column_default, is_nullable, data_type, comment 
-        FROM "{database_name}".information_schema.columns 
-        WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'
-    """
+    # If database not specified, we need to get it from the connection
+    if database_name is None:
+        # We'll use CURRENT_DATABASE() in the query to get the current database context
+        query = f"""
+            SELECT column_name, column_default, is_nullable, data_type, comment 
+            FROM CURRENT_DATABASE().information_schema.columns 
+            WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'
+        """
+        database_name = "CURRENT_DATABASE"  # For display purposes
+    else:
+                 query = f"""
+             SELECT column_name, column_default, is_nullable, data_type, comment 
+             FROM "{database_name}".information_schema.columns 
+             WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'
+         """
     data, data_id = await db.execute_query(query)
 
     output = {
