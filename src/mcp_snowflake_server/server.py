@@ -141,10 +141,14 @@ async def handle_list_tables(arguments, db, *_, exclusion_config=None):
     database = arguments["database"]
     schema = arguments["schema"]
 
+    # Strip quotes if present but preserve original case
+    database_clean = database.strip('"')
+    schema_clean = schema.strip('"')
+    
     query = f"""
         SELECT table_catalog, table_schema, table_name, comment 
-        FROM {database}.information_schema.tables 
-        WHERE table_schema = '{schema.upper()}'
+        FROM "{database_clean}".information_schema.tables 
+        WHERE table_schema = '{schema_clean}'
     """
     data, data_id = await db.execute_query(query)
 
@@ -191,13 +195,14 @@ async def handle_describe_table(arguments, db, *_):
     if len(split_identifier) < 3:
         raise ValueError("Table name must be fully qualified as 'database.schema.table'")
 
-    database_name = split_identifier[0].upper()
-    schema_name = split_identifier[1].upper()
-    table_name = split_identifier[2].upper()
+    # Strip quotes if present but preserve original case
+    database_name = split_identifier[0].strip('"')
+    schema_name = split_identifier[1].strip('"')
+    table_name = split_identifier[2].strip('"')
 
     query = f"""
         SELECT column_name, column_default, is_nullable, data_type, comment 
-        FROM {database_name}.information_schema.columns 
+        FROM "{database_name}".information_schema.columns 
         WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'
     """
     data, data_id = await db.execute_query(query)
@@ -279,16 +284,20 @@ async def prefetch_tables(db: SnowflakeDB, credentials: dict) -> dict:
     """Prefetch table and column information"""
     try:
         logger.info("Prefetching table descriptions")
+        # Strip quotes if present but preserve original case
+        database_clean = credentials['database'].strip('"')
+        schema_clean = credentials['schema'].strip('"')
+        
         table_results, data_id = await db.execute_query(
             f"""SELECT table_name, comment 
-                FROM {credentials['database']}.information_schema.tables 
-                WHERE table_schema = '{credentials['schema'].upper()}'"""
+                FROM "{database_clean}".information_schema.tables 
+                WHERE table_schema = '{schema_clean}'"""
         )
 
         column_results, data_id = await db.execute_query(
             f"""SELECT table_name, column_name, data_type, comment 
-                FROM {credentials['database']}.information_schema.columns 
-                WHERE table_schema = '{credentials['schema'].upper()}'"""
+                FROM "{database_clean}".information_schema.columns 
+                WHERE table_schema = '{schema_clean}'"""
         )
 
         tables_brief = {}
