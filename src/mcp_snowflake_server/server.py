@@ -222,32 +222,46 @@ async def handle_describe_table(arguments, db, *_):
     # Parse the fully qualified table name - support both 2-part and 3-part identifiers
     if len(split_identifier) == 2:
         # 2-part: schema.table (database inferred from connection)
-        database_name = None  # Will be handled later with connection info
+        # First get the current database name
+        current_db_result, _ = await db.execute_query("SELECT CURRENT_DATABASE() as current_db")
+        database_name = current_db_result[0]["CURRENT_DB"] if current_db_result else None
+        
+        if not database_name:
+            raise ValueError("Could not determine current database. Please specify the full 'database.schema.table' format.")
+            
         schema_name = split_identifier[0].strip('"')
         table_name = split_identifier[1].strip('"')
+        
     elif len(split_identifier) == 3:
-        # 3-part: database.schema.table
-        database_name = split_identifier[0].strip('"')
-        schema_name = split_identifier[1].strip('"')
-        table_name = split_identifier[2].strip('"')
+        # Special case: if we have 3 unquoted parts and the first part looks like it could be 
+        # part of a schema name (contains hyphens), treat it as 2-part schema.table
+        if (not any('"' in part for part in split_identifier) and 
+            ('-' in split_identifier[0] or '-' in split_identifier[1])):
+            # Likely case: "in.c-cnb-extractor.cnb_exchange_rate" should be "in.c-cnb-extractor" + "cnb_exchange_rate"
+            # Get current database
+            current_db_result, _ = await db.execute_query("SELECT CURRENT_DATABASE() as current_db")
+            database_name = current_db_result[0]["CURRENT_DB"] if current_db_result else None
+            
+            if not database_name:
+                raise ValueError("Could not determine current database. Please specify the full 'database.schema.table' format.")
+            
+            # Reconstruct schema name from first two parts
+            schema_name = f"{split_identifier[0]}.{split_identifier[1]}"
+            table_name = split_identifier[2]
+        else:
+            # Regular 3-part: database.schema.table
+            database_name = split_identifier[0].strip('"')
+            schema_name = split_identifier[1].strip('"')
+            table_name = split_identifier[2].strip('"')
     else:
         raise ValueError(f"Table name must be either 'schema.table' or 'database.schema.table'. Got {len(split_identifier)} parts: {split_identifier}")
 
-    # If database not specified, we need to get it from the connection
-    if database_name is None:
-        # We'll use CURRENT_DATABASE() in the query to get the current database context
-        query = f"""
-            SELECT column_name, column_default, is_nullable, data_type, comment 
-            FROM CURRENT_DATABASE().information_schema.columns 
-            WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'
-        """
-        database_name = "CURRENT_DATABASE"  # For display purposes
-    else:
-                 query = f"""
-             SELECT column_name, column_default, is_nullable, data_type, comment 
-             FROM "{database_name}".information_schema.columns 
-             WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'
-         """
+    # Build the query using the determined database name
+    query = f"""
+        SELECT column_name, column_default, is_nullable, data_type, comment 
+        FROM "{database_name}".information_schema.columns 
+        WHERE table_schema = '{schema_name}' AND table_name = '{table_name}'
+    """
     data, data_id = await db.execute_query(query)
 
     output = {
